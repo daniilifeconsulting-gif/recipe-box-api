@@ -1,3 +1,6 @@
+## Local setup
+Cloned and run by Danielle on macOS with python 3.9.
+
 # Recipe Box API
 
 A small, working Flask + SQLite API for keeping recipes. Full CRUD, clean
