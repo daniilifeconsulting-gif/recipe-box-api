@@ -154,3 +154,48 @@ Further testing should include JWT expiration, malformed tokens, additional auth
 The Flask development server is intended for local testing, not production deployment.
 
 JWT secrets, passwords, and databases containing credentials must not be committed to public repositories.
+
+## 7. Final Ownership DELETE Verification — November 27, 2026
+
+Additional testing was completed using two authenticated users:
+
+- **User 1:** `recipe_test` — authorized recipe owner.
+- **User 2:** `ownership_test` — authenticated non-owner.
+
+### Test Results
+
+| Test | HTTP Response | Result |
+|---|---|---|
+| User 1 PATCH `/recipes/1` | 200 OK | PASS |
+| User 2 DELETE `/recipes/1` | 404 Not Found | PASS |
+| User 1 POST `/recipes` (temporary recipe) | 201 Created | PASS |
+| User 1 DELETE `/recipes/5` | 204 No Content | PASS |
+| GET `/recipes/5` after deletion | 404 Not Found | PASS |
+
+### Verification Details
+
+User 1 created a temporary private recipe titled **Temporary Ownership Delete Test**, which received Recipe ID 5.
+
+User 1 successfully deleted Recipe 5 using an authenticated DELETE request.
+
+The API returned:
+
+`HTTP/1.1 204 NO CONTENT`
+
+A subsequent GET request for Recipe 5 returned:
+
+`HTTP/1.1 404 NOT FOUND`
+
+```json
+{"error":"recipe not found"}
+```
+
+The temporary test recipe was successfully removed.
+
+### Security Conclusion
+
+The API correctly allows authenticated owners to modify and delete their own recipes while preventing authenticated non-owners from modifying or deleting another user's recipes.
+
+Unauthorized cross-user operations return HTTP 404 rather than HTTP 403. This avoids disclosing whether another user's recipe exists.
+
+**Final result: Ownership enforcement verified in all tested scenarios.**
