@@ -116,7 +116,7 @@ def login():
 
     db = get_db()
     user = db.execute(
-        "SELECT id, username, password_hash FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, role FROM users WHERE username = ?",
         (username.strip(),)
     ).fetchone()
 
@@ -126,20 +126,58 @@ def login():
     now = datetime.now(timezone.utc)
 
     token = jwt.encode(
-        {
-            "sub": str(user["id"]),
-            "username": user["username"],
-            "iat": now,
-            "exp": now + timedelta(minutes=30)
-        },
-        secret,
-        algorithm="HS256"
-    )
+    {
+        "sub": str(user["id"]),
+        "username": user["username"],
+        "role": user["role"],
+        "iat": now,
+        "exp": now + timedelta(minutes=30)
+    },
+    secret,
+    algorithm="HS256"
+)
 
     return jsonify({
         "username": user["username"],
         "token": token
     }), 200
+
+def current_identity():
+    auth = request.headers.get("Authorization", "")
+    secret = app.config.get("JWT_SECRET_KEY")
+
+    if not secret or not auth.startswith("Bearer "):
+        return None
+
+    token = auth[7:].strip()
+
+    try:
+        claims = jwt.decode(
+            token,
+            secret,
+            algorithms=["HS256"],
+            options={"require": ["sub", "iat", "exp"]}
+        )
+
+        user_id = int(claims["sub"])
+
+        if user_id <= 0:
+            return None
+
+        user = get_db().execute(
+            "SELECT id, role FROM users WHERE id = ?",
+            (user_id,)
+        ).fetchone()
+
+        if not user:
+            return None
+
+        return {"id": user["id"], "role": user["role"]}
+
+    except (jwt.InvalidTokenError, ValueError, TypeError):
+        return None
+
+
 def current_user_id():
     auth = request.headers.get("Authorization", "")
     secret = app.config.get("JWT_SECRET_KEY")
@@ -179,32 +217,50 @@ def hello():
 
 @app.get("/recipes")
 def list_recipes():
-    user_id = current_user_id()
+    identity = current_identity()
+    db = get_db()
 
-    rows = get_db().execute(
-        "SELECT * FROM recipes "
-        "WHERE is_public = 1 OR owner_id = ? "
-        "ORDER BY id",
-        (user_id,)
-    ).fetchall()
+    if identity and identity["role"] == "admin":
+        rows = db.execute(
+            "SELECT * FROM recipes ORDER BY id"
+        ).fetchall()
+    else:
+        user_id = identity["id"] if identity else None
+
+        rows = db.execute(
+            "SELECT * FROM recipes "
+            "WHERE is_public = 1 OR owner_id = ? "
+            "ORDER BY id",
+            (user_id,)
+        ).fetchall()
 
     return jsonify([recipe_to_dict(r) for r in rows])
 
 
 @app.get("/recipes/<int:recipe_id>")
 def get_recipe(recipe_id):
-    user_id = current_user_id()
+    identity = current_identity()
+    db = get_db()
 
-    row = get_db().execute(
-        "SELECT * FROM recipes "
-        "WHERE id = ? AND (is_public = 1 OR owner_id = ?)",
-        (recipe_id, user_id)
-    ).fetchone()
+    if identity and identity["role"] == "admin":
+        row = db.execute(
+            "SELECT * FROM recipes WHERE id = ?",
+            (recipe_id,)
+        ).fetchone()
+    else:
+        user_id = identity["id"] if identity else None
+
+        row = db.execute(
+            "SELECT * FROM recipes "
+            "WHERE id = ? AND (is_public = 1 OR owner_id = ?)",
+            (recipe_id, user_id)
+        ).fetchone()
 
     if row is None:
         return jsonify({"error": "recipe not found"}), 404
 
     return jsonify(recipe_to_dict(row))
+
 
 @app.post("/recipes")
 def create_recipe():
@@ -273,9 +329,9 @@ def create_recipe():
 
 @app.patch("/recipes/<int:recipe_id>")
 def update_recipe(recipe_id):
-    user_id = current_user_id()
+    identity = current_identity()
 
-    if user_id is None:
+    if identity is None:
         return jsonify({"error": "log in first"}), 401
 
     data = request.get_json(silent=True)
@@ -314,34 +370,38 @@ def update_recipe(recipe_id):
     if not fields:
         return jsonify({"error": "nothing to update"}), 400
 
-    values.extend([recipe_id, user_id])
     db = get_db()
 
+    # 🔐 Check recipe existence and ownership
+    existing_recipe = db.execute(
+        "SELECT owner_id FROM recipes WHERE id = ?",
+        (recipe_id,)
+    ).fetchone()
+
+    if existing_recipe is None:
+        return jsonify({"error": "recipe not found"}), 404
+
+    owner_id = existing_recipe["owner_id"]
+
+    if identity["id"] != owner_id and identity["role"] != "admin":
+        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
+
+    # ✅ Authorized (owner or admin)
+    values.append(recipe_id)
+
     try:
-        cur = db.execute(
-            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ? AND owner_id = ?",
+        db.execute(
+            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?",
             values
         )
         db.commit()
-
     except sqlite3.IntegrityError:
         db.rollback()
         return jsonify({"error": "a recipe with that title already exists"}), 409
 
-    if cur.rowcount == 0:
-        existing_recipe = db.execute(
-            "SELECT owner_id FROM recipes WHERE id = ?",
-            (recipe_id,)
-        ).fetchone()
-
-        if existing_recipe is None:
-            return jsonify({"error": "recipe not found"}), 404
-
-        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
-
     row = db.execute(
-        "SELECT * FROM recipes WHERE id = ? AND owner_id = ?",
-        (recipe_id, user_id)
+        "SELECT * FROM recipes WHERE id = ?",
+        (recipe_id,)
     ).fetchone()
 
     return jsonify(recipe_to_dict(row)), 200
@@ -350,16 +410,17 @@ def update_recipe(recipe_id):
 
 @app.delete("/recipes/<int:recipe_id>")
 def delete_recipe(recipe_id):
-    user_id = current_user_id()
+    identity = current_identity()
 
-    if user_id is None:
+    if identity is None:
         return jsonify({"error": "log in first"}), 401
 
     db = get_db()
 
     cur = db.execute(
-        "DELETE FROM recipes WHERE id = ? AND owner_id = ?",
-        (recipe_id, user_id)
+        "DELETE FROM recipes WHERE id = ? "
+        "AND (owner_id = ? OR ? = 'admin')",
+        (recipe_id, identity["id"], identity["role"])
     )
 
     db.commit()
@@ -373,9 +434,12 @@ def delete_recipe(recipe_id):
         if existing_recipe is None:
             return jsonify({"error": "recipe not found"}), 404
 
-        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
+        return jsonify({
+            "error": "forbidden: you do not own this recipe"
+        }), 403
 
     return "", 204
+
 
 if __name__ == "__main__":
     app.run(debug=False)

@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     name TEXT,
     phone TEXT,
-    address TEXT
+    address TEXT,
+    role TEXT NOT NULL DEFAULT 'user'
+        CHECK (role IN ('user', 'admin'))
 );
 """
 
@@ -51,6 +53,22 @@ SEED = [
 
 connection = sqlite3.connect("recipes.db")
 connection.executescript(SCHEMA)
+
+# Safely migrate older databases to support RBAC.
+columns = {
+    row[1]
+    for row in connection.execute("PRAGMA table_info(users)")
+}
+
+if "role" not in columns:
+    connection.execute(
+        "ALTER TABLE users ADD COLUMN role "
+        "TEXT NOT NULL DEFAULT 'user' "
+        "CHECK (role IN ('user', 'admin'))"
+    )
+    connection.commit()
+    print("Database migrated: role column added.")
+
 
 # Create a seed owner only if User ID 1 does not exist.
 owner = connection.execute(

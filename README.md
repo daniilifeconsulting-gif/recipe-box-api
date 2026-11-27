@@ -8,7 +8,10 @@ A Flask and SQLite REST API developed for the BE104 Security Project.
 - User registration with PBKDF2-SHA256 password hashing
 - JWT authentication with 30-minute token expiration
 - Public and private recipe visibility
-- Recipe ownership restrictions
+- Role-based access control (RBAC) with admin and user roles
+- Recipe ownership restrictions with administrator override
+- Protection against registration privilege escalation
+- Database role verification for authorization
 - Protection against unauthorized recipe updates and deletions
 - Input validation and parameterized SQL queries
 
@@ -36,6 +39,8 @@ This creates the SQLite database, a dedicated seed-owner account, and three samp
 
 The seed-owner account uses a randomly generated password and is not intended for interactive login.
 
+Database initialization also migrates older users tables that lack a role column. Existing role assignments are preserved, and newly assigned roles default to user.
+
 ## Start the API
 
 Set a JWT signing secret:
@@ -58,7 +63,7 @@ http://127.0.0.1:5002
 
 Register an account using `POST /register`.
 
-Log in using `POST /login` to receive a JWT token.
+Log in using `POST /login` to receive a JWT token containing the user ID, username, role, issued-at time, and expiration.
 
 Include the token when accessing protected endpoints:
 
@@ -76,8 +81,32 @@ Authorization: Bearer YOUR_JWT_TOKEN
 | GET | /recipes | Retrieve accessible recipes |
 | GET | /recipes/&lt;id&gt; | Retrieve an accessible recipe |
 | POST | /recipes | Create a recipe |
-| PATCH | /recipes/&lt;id&gt; | Update an owned recipe |
-| DELETE | /recipes/&lt;id&gt; | Delete an owned recipe |
+| PATCH | /recipes/&lt;id&gt; | Update a recipe as its owner or an administrator |
+| DELETE | /recipes/&lt;id&gt; | Delete a recipe as its owner or an administrator |
+
+## Role-Based Access Control
+
+| Permission | Anonymous | User | Admin |
+|---|---|---|---|
+| Read public recipes | Yes | Yes | Yes |
+| Read own private recipes | No | Yes | Yes |
+| Read other users' private recipes | No | No | Yes |
+| Create recipes | No | Yes | Yes |
+| Update own recipes | No | Yes | Yes |
+| Update other users' recipes | No | No | Yes |
+| Delete own recipes | No | Yes | Yes |
+| Delete other users' recipes | No | No | Yes |
+| List all recipes | No | No | Yes |
+
+New accounts receive the user role by default.
+Registration cannot assign administrator privileges.
+
+Administrator roles must be assigned through a trusted
+database administration operation.
+
+JWT signatures and expiration are validated before
+protected operations. Administrator authorization uses
+the current role retrieved from SQLite.
 
 ## Security Test Results
 
@@ -87,8 +116,21 @@ The following tests were performed locally:
 |---|---|
 | Anonymous recipe update | 401 Unauthorized |
 | Owner updates their recipe | 200 OK |
-| Non-owner attempts recipe update | 403 Forbidden |
-| Non-owner attempts recipe deletion | 403 Forbidden |
+| Regular non-owner attempts recipe update | 403 Forbidden |
+| Regular non-owner attempts recipe deletion | 403 Forbidden |
+| Administrator updates another user's recipe | 200 OK |
+| Administrator deletes another user's recipe | 204 No Content |
+| Regular user updates own recipe | 200 OK |
+| Regular user deletes own recipe | 204 No Content |
+| Administrator reads another user's private recipe | 200 OK |
+| Regular user reads own private recipe | 200 OK |
+| Regular user reads another user's private recipe | 404 Not Found |
+| Anonymous visitor reads private recipe | 404 Not Found |
+| Anonymous visitor reads public recipe | 200 OK |
+| Administrator lists recipes | 200 OK - all recipes |
+| Regular user lists recipes | 200 OK - public and owned recipes |
+| Anonymous visitor lists recipes | 200 OK - public recipes only |
+| Registration with requested admin role | 201 Created - user role assigned |
 
 Database verification confirmed that unauthorized update and deletion attempts did not modify or remove the targeted recipe.
 

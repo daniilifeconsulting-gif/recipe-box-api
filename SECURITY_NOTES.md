@@ -258,3 +258,169 @@ The Recipe Box API now returns the instructor-required HTTP 403 Forbidden status
 Ownership restrictions remain enforced through SQL queries that include both the recipe ID and authenticated owner ID.
 
 The earlier HTTP 404 cross-user results are retained in this document as historical evidence from before the authorization response update.
+
+
+## 9. Role-Based Access Control (RBAC) — November 27, 2026
+
+This section documents the current authorization model and
+supersedes the earlier owner-only authorization rules.
+
+### Account Roles
+
+| User ID | Username | Role |
+|---|---|---|
+| 1 | recipe_test | admin |
+| 2 | ownership_test | user |
+
+### Authentication Improvements
+
+The login route retrieves the user's role from SQLite
+and includes it in the signed JWT payload.
+
+Verified administrator JWT payload:
+
+```json
+{
+    "sub": "1",
+    "username": "recipe_test",
+    "role": "admin",
+    "iat": 1795763309,
+    "exp": 1795765109
+}
+```
+
+Verified regular-user JWT payload:
+
+```json
+{
+    "sub": "2",
+    "username": "ownership_test",
+    "role": "user",
+    "iat": 1795763350,
+    "exp": 1795765150
+}
+```
+
+JWT signatures and expiration are validated using HS256.
+The current_identity() function retrieves the current
+account role directly from SQLite for authorization.
+
+### Authorization Rules
+
+- Administrators may read, update, and delete any recipe.
+- Regular users may update and delete only their own recipes.
+- Regular users may read public recipes and their own private recipes.
+- Anonymous visitors may read only public recipes.
+- Unauthenticated modification requests return HTTP 401.
+- Unauthorized regular-user modifications return HTTP 403.
+- Missing recipes return HTTP 404.
+- Unauthorized private recipe reads return HTTP 404.
+- Recipe ownership cannot be reassigned through PATCH.
+
+### PATCH and DELETE Verification
+
+| Security Test | Recipe ID | Actual Response | Result |
+|---|---|---|---|
+| Admin PATCH another user's recipe | 6 | 200 OK | PASS |
+| Regular user PATCH another user's recipe | 1 | 403 Forbidden | PASS |
+| Regular user PATCH own recipe | 6 | 200 OK | PASS |
+| Regular user DELETE another user's recipe | 1 | 403 Forbidden | PASS |
+| Admin DELETE another user's recipe | 6 | 204 No Content | PASS |
+| Regular user DELETE own recipe | 6 | 204 No Content | PASS |
+
+Separate temporary recipes were used for deletion testing.
+SQLite reused Recipe ID 6 after the first deletion.
+
+Unauthorized modification response:
+
+```json
+{"error":"forbidden: you do not own this recipe"}
+```
+
+Successful DELETE requests returned HTTP 204 with an empty body.
+
+### GET and Privacy Verification
+
+| Security Test | Actual Response | Result |
+|---|---|---|
+| Admin reads another user's private recipe | 200 OK | PASS |
+| Regular user reads own private recipe | 200 OK | PASS |
+| Regular user reads another user's private recipe | 404 Not Found | PASS |
+| Anonymous visitor reads private recipe | 404 Not Found | PASS |
+| Anonymous visitor reads public recipe | 200 OK | PASS |
+| Admin lists recipes | 200 OK - six recipes | PASS |
+| Regular user lists recipes | 200 OK - three accessible recipes | PASS |
+| Anonymous visitor lists recipes | 200 OK - two public recipes | PASS |
+
+No unauthorized private recipe contents were returned
+in the tested read requests.
+
+### Registration Privilege Escalation Test
+
+A temporary account was registered with a request
+containing the field "role": "admin".
+
+The API returned HTTP 201 Created.
+
+The database verification returned:
+
+```text
+REGISTERED ACCOUNT: (3, 'rbac_escalation_test', 'user')
+PASS: Privilege escalation prevented.
+```
+
+Registration ignored the supplied administrator role.
+The new account received the default user role.
+
+### Database Initialization and Migration
+
+The users schema now includes:
+
+```sql
+role TEXT NOT NULL DEFAULT 'user'
+    CHECK (role IN ('user', 'admin'))
+```
+
+Fresh database initialization was tested successfully
+in an isolated temporary directory.
+
+Backward-compatible migration was also tested using
+a legacy users table without the role column.
+
+```text
+Database migrated: role column added.
+MIGRATED ACCOUNT: (1, 'legacy_user', 'user')
+PASS: Existing account preserved.
+PASS: Default role assigned correctly.
+```
+
+Existing role assignments are not overwritten.
+Legacy accounts without roles receive regular-user privileges.
+
+### Database Cleanup and Integrity
+
+Temporary RBAC recipes and the privilege escalation
+test account were removed after testing.
+
+Four original recipes and two intended user accounts remain.
+
+### Final RBAC Security Conclusion
+
+All 14 planned GET, PATCH, and DELETE authorization
+tests passed.
+
+Both JWT role payloads were verified.
+The tested registration privilege escalation attempt failed.
+Fresh database initialization and legacy role migration passed.
+
+The tested authorization controls allow administrators
+to manage all recipes while preserving regular-user
+ownership and privacy restrictions.
+
+These results demonstrate successful RBAC implementation
+for the tested scenarios, not a comprehensive production
+security audit.
+
+Further security testing should include concurrent
+authorization changes, invalid and expired tokens,
+and additional deployment security controls.
