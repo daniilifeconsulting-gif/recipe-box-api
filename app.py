@@ -329,7 +329,15 @@ def update_recipe(recipe_id):
         return jsonify({"error": "a recipe with that title already exists"}), 409
 
     if cur.rowcount == 0:
-        return jsonify({"error": "recipe not found"}), 404
+        existing_recipe = db.execute(
+            "SELECT owner_id FROM recipes WHERE id = ?",
+            (recipe_id,)
+        ).fetchone()
+
+        if existing_recipe is None:
+            return jsonify({"error": "recipe not found"}), 404
+
+        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
 
     row = db.execute(
         "SELECT * FROM recipes WHERE id = ? AND owner_id = ?",
@@ -357,7 +365,15 @@ def delete_recipe(recipe_id):
     db.commit()
 
     if cur.rowcount == 0:
-        return jsonify({"error": "recipe not found"}), 404
+        existing_recipe = db.execute(
+            "SELECT owner_id FROM recipes WHERE id = ?",
+            (recipe_id,)
+        ).fetchone()
+
+        if existing_recipe is None:
+            return jsonify({"error": "recipe not found"}), 404
+
+        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
 
     return "", 204
 

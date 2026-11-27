@@ -87,8 +87,8 @@ The following tests were performed locally:
 |---|---|
 | Anonymous recipe update | 401 Unauthorized |
 | Owner updates their recipe | 200 OK |
-| Non-owner attempts recipe update | 404 Not Found |
-| Non-owner attempts recipe deletion | 404 Not Found |
+| Non-owner attempts recipe update | 403 Forbidden |
+| Non-owner attempts recipe deletion | 403 Forbidden |
 
 Database verification confirmed that unauthorized update and deletion attempts did not modify or remove the targeted recipe.
 

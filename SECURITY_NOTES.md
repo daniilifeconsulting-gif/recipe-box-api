@@ -43,9 +43,9 @@ Recipe creation requires authentication.
 
 Recipe updates and deletions use ownership checks to restrict modifications to the authenticated recipe owner.
 
-The application rejects attempts to modify another user's recipe with HTTP 404 Not Found.
+The application now rejects attempts to modify another user's recipe with HTTP 403 Forbidden.
 
-This prevents the tested Broken Object Level Authorization (BOLA/IDOR) attacks while avoiding unnecessary disclosure of recipe existence.
+This prevents the tested Broken Object Level Authorization (BOLA/IDOR) attacks. HTTP 403 indicates that an authenticated user is not authorized to modify the recipe.
 
 ### Database Improvements
 
@@ -196,6 +196,65 @@ The temporary test recipe was successfully removed.
 
 The API correctly allows authenticated owners to modify and delete their own recipes while preventing authenticated non-owners from modifying or deleting another user's recipes.
 
-Unauthorized cross-user operations return HTTP 404 rather than HTTP 403. This avoids disclosing whether another user's recipe exists.
+The updated API returns HTTP 403 Forbidden for unauthorized cross-user PATCH and DELETE requests, matching the instructor's requirements.
 
 **Final result: Ownership enforcement verified in all tested scenarios.**
+
+## 8. Final Instructor-Required Authorization Verification — November 27, 2026
+
+The API was updated to distinguish unauthorized access from nonexistent recipes.
+
+- **403 Forbidden:** The recipe exists but belongs to another authenticated user.
+- **404 Not Found:** The requested recipe does not exist.
+- **200 OK:** The authenticated owner successfully updates a recipe.
+- **204 No Content:** The authenticated owner successfully deletes a recipe.
+
+### Verified HTTP Results
+
+| Test | HTTP Response | Result |
+|---|---|---|
+| User 1 PATCH `/recipes/1` | 200 OK | PASS |
+| User 2 PATCH `/recipes/1` | 403 Forbidden | PASS |
+| User 2 DELETE `/recipes/1` | 403 Forbidden | PASS |
+| User 1 DELETE `/recipes/5` (earlier test) | 204 No Content | PASS |
+| GET `/recipes/1` after unauthorized attempts | 200 OK | PASS |
+
+### Unauthorized PATCH — User 2
+
+**Request:** `PATCH /recipes/1`
+
+**Response:** HTTP 403 Forbidden
+
+```json
+{"error":"forbidden: you do not own this recipe"}
+```
+
+### Unauthorized DELETE — User 2
+
+**Request:** `DELETE /recipes/1`
+
+**Response:** HTTP 403 Forbidden
+
+```json
+{"error":"forbidden: you do not own this recipe"}
+```
+
+### Database Protection Verification
+
+After both unauthorized requests, a GET request for Recipe 1 returned HTTP 200 OK.
+
+The recipe still contained:
+
+```text
+Authorized update by recipe owner - security test passed
+```
+
+This confirmed that the unauthorized PATCH did not overwrite the instructions and the unauthorized DELETE did not remove the recipe.
+
+### Final Conclusion
+
+The Recipe Box API now returns the instructor-required HTTP 403 Forbidden status for authenticated users attempting to modify or delete recipes owned by another user.
+
+Ownership restrictions remain enforced through SQL queries that include both the recipe ID and authenticated owner ID.
+
+The earlier HTTP 404 cross-user results are retained in this document as historical evidence from before the authorization response update.
