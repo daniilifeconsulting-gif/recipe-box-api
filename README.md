@@ -141,3 +141,36 @@ Three legacy recipes with missing ownership were migrated to User ID 1. A subseq
 This project uses Flask's development server for local testing. It is not configured for production deployment.
 
 Never commit JWT secrets, real passwords, or local database files containing user credentials.
+
+## Centralized Authentication and Authorization
+
+The API uses reusable security decorators to reduce duplicated
+authentication and authorization logic.
+
+- `@login_required`: Validates JWT authentication and attaches
+  the authenticated identity to `g.identity`.
+- `@owner_or_admin_required`: Reuses authentication, verifies
+  recipe existence, and enforces owner-or-administrator permissions.
+- PATCH and DELETE both use the shared authorization decorator.
+- Database-level ownership and administrator restrictions provide
+  an additional layer of protection.
+- Concurrent changes that prevent an authorized write return
+  HTTP 409 Conflict.
+
+### Security Verification
+
+| Scenario | PATCH | DELETE |
+|---|---|---|
+| Missing JWT | 401 | 401 |
+| Invalid JWT | 401 | 401 |
+| Unauthorized non-owner | 403 | 403 |
+| Nonexistent recipe | 404 | 404 |
+| Authorized owner | 200 | 204 |
+| Administrator override | 200 | 204 |
+
+All 12 planned runtime authentication and authorization tests passed.
+Temporary test recipes were removed, and the four original recipes
+were preserved.
+
+The concurrent-write 409 safeguard is implemented but has not
+been independently runtime-tested.

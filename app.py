@@ -8,6 +8,7 @@ Flask and SQLite recipe management API featuring:
 - Input validation and parameterized SQL queries
 """
 
+from functools import wraps
 import sqlite3
 import os
 import jwt
@@ -178,6 +179,46 @@ def current_identity():
         return None
 
 
+def login_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        identity = current_identity()
+
+        if identity is None:
+            return jsonify({"error": "log in first"}), 401
+
+        # Attach identity to the request context.
+        g.identity = identity
+
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def owner_or_admin_required(fn):
+    @login_required
+    @wraps(fn)
+    def wrapper(recipe_id, *args, **kwargs):
+        identity = g.identity
+
+        recipe = get_db().execute(
+            "SELECT owner_id FROM recipes WHERE id = ?",
+            (recipe_id,)
+        ).fetchone()
+
+        if recipe is None:
+            return jsonify({"error": "recipe not found"}), 404
+
+        if identity["id"] != recipe["owner_id"] and identity["role"] != "admin":
+            return jsonify({
+                "error": "forbidden: you do not own this recipe"
+            }), 403
+
+        return fn(recipe_id, *args, **kwargs)
+
+    return wrapper
+
+
 def current_user_id():
     auth = request.headers.get("Authorization", "")
     secret = app.config.get("JWT_SECRET_KEY")
@@ -328,11 +369,9 @@ def create_recipe():
     return jsonify(recipe_to_dict(row)), 201
 
 @app.patch("/recipes/<int:recipe_id>")
+@owner_or_admin_required
 def update_recipe(recipe_id):
-    identity = current_identity()
-
-    if identity is None:
-        return jsonify({"error": "log in first"}), 401
+    identity = g.identity
 
     data = request.get_json(silent=True)
 
@@ -372,28 +411,19 @@ def update_recipe(recipe_id):
 
     db = get_db()
 
-    # 🔐 Check recipe existence and ownership
-    existing_recipe = db.execute(
-        "SELECT owner_id FROM recipes WHERE id = ?",
-        (recipe_id,)
-    ).fetchone()
-
-    if existing_recipe is None:
-        return jsonify({"error": "recipe not found"}), 404
-
-    owner_id = existing_recipe["owner_id"]
-
-    if identity["id"] != owner_id and identity["role"] != "admin":
-        return jsonify({"error": "forbidden: you do not own this recipe"}), 403
-
-    # ✅ Authorized (owner or admin)
-    values.append(recipe_id)
+    values.extend((recipe_id, identity["id"], identity["role"]))
 
     try:
-        db.execute(
-            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ?",
+        cur = db.execute(
+            f"UPDATE recipes SET {', '.join(fields)} WHERE id = ? "
+            "AND (owner_id = ? OR ? = 'admin')",
             values
         )
+
+        if cur.rowcount == 0:
+            db.rollback()
+            return jsonify({"error": "recipe changed; retry"}), 409
+
         db.commit()
     except sqlite3.IntegrityError:
         db.rollback()
@@ -409,11 +439,9 @@ def update_recipe(recipe_id):
 
 
 @app.delete("/recipes/<int:recipe_id>")
+@owner_or_admin_required
 def delete_recipe(recipe_id):
-    identity = current_identity()
-
-    if identity is None:
-        return jsonify({"error": "log in first"}), 401
+    identity = g.identity
 
     db = get_db()
 
@@ -423,20 +451,11 @@ def delete_recipe(recipe_id):
         (recipe_id, identity["id"], identity["role"])
     )
 
-    db.commit()
-
     if cur.rowcount == 0:
-        existing_recipe = db.execute(
-            "SELECT owner_id FROM recipes WHERE id = ?",
-            (recipe_id,)
-        ).fetchone()
+        db.rollback()
+        return jsonify({"error": "recipe changed; retry"}), 409
 
-        if existing_recipe is None:
-            return jsonify({"error": "recipe not found"}), 404
-
-        return jsonify({
-            "error": "forbidden: you do not own this recipe"
-        }), 403
+    db.commit()
 
     return "", 204
 

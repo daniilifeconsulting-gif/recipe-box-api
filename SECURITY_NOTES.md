@@ -424,3 +424,57 @@ security audit.
 Further security testing should include concurrent
 authorization changes, invalid and expired tokens,
 and additional deployment security controls.
+
+## 10. Centralized Authentication and Authorization
+
+Date tested: November 27, 2026
+
+### Security Architecture
+
+Authentication and authorization have been centralized into
+reusable decorators in app.py.
+
+- `login_required`: Validates JWT authentication using
+  current_identity(), rejects unauthenticated requests with
+  HTTP 401, and attaches the authenticated identity to g.identity.
+- `owner_or_admin_required`: Reuses login_required, verifies
+  recipe existence, and enforces owner-or-administrator permissions.
+- PATCH and DELETE routes both use owner_or_admin_required.
+- Parameterized SQL statements retain owner-or-admin restrictions
+  at the database write level.
+
+### Runtime Verification
+
+| Security Test | PATCH | DELETE | Result |
+|---|---|---|---|
+| Missing JWT | 401 | 401 | PASS |
+| Invalid JWT | 401 | 401 | PASS |
+| Unauthorized non-owner | 403 | 403 | PASS |
+| Nonexistent recipe | 404 | 404 | PASS |
+| Authorized owner | 200 | 204 | PASS |
+| Administrator override | 200 | 204 | PASS |
+
+Total planned tests: 12
+Passed: 12
+Failed: 0
+
+### Defense Improvements
+
+- Centralized authentication.
+- Centralized ownership and role-based authorization.
+- Removed duplicated authorization checks from route handlers.
+- Preserved database-level permission enforcement.
+- Authorization occurs before PATCH request-body validation.
+- Concurrent changes preventing an authorized write return 409.
+
+### Database Cleanup
+
+All temporary authorization test recipes were removed.
+The four original recipes remain in the database.
+
+### Verification Limitations
+
+The concurrent-write 409 safeguard was implemented and passed
+Python syntax verification but was not independently runtime-tested.
+The 12 passing tests verify the planned authentication and
+authorization scenarios, not every possible security vulnerability.
